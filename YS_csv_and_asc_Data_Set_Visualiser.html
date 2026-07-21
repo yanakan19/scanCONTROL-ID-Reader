@@ -826,7 +826,7 @@ function loadPointsIntoScene(flatArr, filename) {
   }
   document.getElementById('dropHint').style.display = 'none';
 
-  const positions = new Float32Array(flatArr);
+  const positions = flatArr instanceof Float32Array ? flatArr : new Float32Array(flatArr);
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
 
@@ -1035,6 +1035,10 @@ document.getElementById('batchToggle').addEventListener('click', (e) => {
 // blocked in some sandboxed/embedded contexts).
 const folderInput = document.getElementById('folderInput');
 
+function yieldToBrowser() {
+  return new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
+}
+
 folderInput.addEventListener('change', async (e) => {
   const files = Array.from(e.target.files).filter(f => /\.(csv|asc|txt)$/i.test(f.name));
   const listEl = document.getElementById('fileList');
@@ -1048,7 +1052,16 @@ folderInput.addEventListener('change', async (e) => {
   }
   files.sort((a,b) => a.name.localeCompare(b.name, undefined, {numeric:true}));
 
-  for (const file of files) {
+  // Parsing + fitting each file is real synchronous work (hundreds of
+  // thousands of points per file); with several files queued up back to
+  // back this used to run as one uninterrupted block, long enough that
+  // some hosting contexts (e.g. a sandboxed preview) treat the page as
+  // unresponsive. Yielding to the browser between files, and reporting
+  // progress as we go, keeps the page painting/responsive throughout and
+  // lets one bad file fail without taking the rest of the batch down.
+  listEl.innerHTML = `<div class="empty-note">Loading 0 / ${files.length}...</div>`;
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
     try {
       const text = await file.text();
       const flat = parsePointCloud(text);
@@ -1056,10 +1069,13 @@ folderInput.addEventListener('change', async (e) => {
       const fit = fitBore(positions);
       batchResults.push(Object.assign({ name: file.name, positions, n: flat.length/3 }, fit));
     } catch (err) {
-      batchResults.push({ name: file.name, ok:false, reason: 'read error' });
+      batchResults.push({ name: file.name, ok:false, reason: 'failed to parse: ' + (err && err.message ? err.message : 'unknown error') });
     }
+    listEl.innerHTML = `<div class="empty-note">Loading ${i+1} / ${files.length}...</div>`;
+    await yieldToBrowser();
   }
 
+  listEl.innerHTML = '';
   files.forEach((file, i) => {
     const r = batchResults[i];
     const item = document.createElement('div');
@@ -1070,13 +1086,17 @@ folderInput.addEventListener('change', async (e) => {
     item.addEventListener('click', () => {
       document.querySelectorAll('.file-item').forEach(el => el.classList.remove('active'));
       item.classList.add('active');
-      loadPointsIntoScene(Array.from(batchResults[i].positions || []), file.name);
+      loadPointsIntoScene(batchResults[i].positions || new Float32Array(0), file.name);
     });
     listEl.appendChild(item);
   });
 
-  listEl.firstChild.classList.add('active');
-  loadPointsIntoScene(Array.from(batchResults[0].positions || []), files[0].name);
+  try {
+    listEl.firstChild.classList.add('active');
+    loadPointsIntoScene(batchResults[0].positions || new Float32Array(0), files[0].name);
+  } catch (err) {
+    showHint('Could not display "' + files[0].name + '": ' + (err && err.message ? err.message : 'unknown error'));
+  }
 
   renderBatch();
 });
