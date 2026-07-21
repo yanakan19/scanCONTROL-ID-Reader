@@ -618,8 +618,15 @@ function extractArc(positions) {
   }
   if (bz.length < 10) return { ok:false, reason:'too few populated bins across x' };
 
-  const sorted=[...bz].sort((a,c)=>a-c);
-  const baseline=sorted[Math.floor(sorted.length/2)];
+  // Wall level: use the two flanking plateaus specifically (the flat
+  // back-wall bins at the very left/right edges of the scan), not the
+  // whole-profile median - a median can be pulled toward the bore's own
+  // level if the bore region happens to make up a large share of the
+  // scan width, which would corrupt the wall/bore split itself.
+  const edgeCount = Math.max(3, Math.floor(bz.length*0.1));
+  const leftEdge = [...bz.slice(0, edgeCount)].sort((a,c)=>a-c);
+  const rightEdge = [...bz.slice(-edgeCount)].sort((a,c)=>a-c);
+  const baseline = (leftEdge[Math.floor(leftEdge.length/2)] + rightEdge[Math.floor(rightEdge.length/2)]) / 2;
   const thresh=0.2*spanZ;
 
   let best={s:-1,e:-1,len:0}, s=-1;
