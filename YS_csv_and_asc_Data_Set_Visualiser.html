@@ -638,13 +638,58 @@ function extractArc(positions) {
   const baseline = Math.abs(highZ-flankRef) > Math.abs(lowZ-flankRef) ? lowZ : highZ;
   const thresh=0.2*spanZ;
 
-  let best={s:-1,e:-1,len:0}, s=-1;
-  for (let i=0;i<=bz.length;i++) {
-    const dev = i<bz.length && Math.abs(bz[i]-baseline)>thresh;
-    if (dev && s<0) s=i;
-    if (!dev && s>=0) { if (i-s>best.len) best={s,e:i-1,len:i-s}; s=-1; }
+  // Find every contiguous deviating run, not just the longest one - a
+  // wall with any discontinuity (a step, a fixture line, a reflectivity
+  // artifact) can itself form a long qualifying run and get mistaken for
+  // the bore. Two checks before picking one:
+  //   1. Shape: a genuine arc rises then falls (or falls then rises) -
+  //      its peak deviation sits somewhere in the interior of the run,
+  //      not pinned to one end. A wall step is one-sided/monotonic and
+  //      fails this. Peak is measured from the run's OWN endpoint
+  //      average, not the global wall baseline - comparing against a
+  //      distant reference doesn't reliably reflect a run's own local
+  //      shape (a run that's already far from a distant baseline
+  //      everywhere can look monotonic against it even when it truly
+  //      rises and falls).
+  //   2. Selection: rank by length primarily, since the true bore is
+  //      physically the dominant deviating feature - NOT by fit
+  //      residual, which is a trap: a short run is inherently easier to
+  //      fit tightly just because it has fewer points to satisfy, and
+  //      can out-score the real bore on residual alone despite not being
+  //      it (confirmed on real data: a small secondary artifact won a
+  //      pure-residual contest on 3 of 5 test files). Residual is only
+  //      used as a sanity check to skip a long-but-badly-shaped run in
+  //      favour of the next-longest.
+  const runs = [];
+  { let s=-1;
+    for (let i=0;i<=bz.length;i++) {
+      const dev = i<bz.length && Math.abs(bz[i]-baseline)>thresh;
+      if (dev && s<0) s=i;
+      if (!dev && s>=0) { runs.push({s,e:i-1,len:i-s}); s=-1; }
+    }
   }
-  if (best.len < 6) return { ok:false, reason:'no arc region detected (need >=6 bins)' };
+  const longEnough = runs.filter(r => r.len >= 6);
+  if (!longEnough.length) return { ok:false, reason:'no arc region detected (need >=6 bins)' };
+
+  const hasInteriorPeak = (runZ) => {
+    const endLevel = (runZ[0] + runZ[runZ.length-1]) / 2;
+    let peakIdx = 0, peakDev = 0;
+    for (let i=0;i<runZ.length;i++) { const d = Math.abs(runZ[i]-endLevel); if (d>peakDev) { peakDev=d; peakIdx=i; } }
+    const margin = Math.max(1, Math.floor(runZ.length*0.15));
+    return peakIdx >= margin && peakIdx <= runZ.length-1-margin;
+  };
+  const shaped = longEnough.filter(r => hasInteriorPeak(bz.slice(r.s, r.e+1)));
+  const pool = (shaped.length ? shaped : longEnough).slice().sort((p,q) => q.len - p.len);
+
+  let best = pool[0];
+  for (const r of pool) {
+    const rx = bx.slice(r.s, r.e+1), rz = bz.slice(r.s, r.e+1);
+    const trial = fitAxisAlignedEllipse(rx, rz);
+    if (!trial) continue;
+    let sum = 0;
+    for (let i=0;i<rx.length;i++) { const dx=(rx[i]-trial.xc)/trial.a, dz=(rz[i]-trial.zc)/trial.b; sum += Math.abs(Math.sqrt(dx*dx+dz*dz)-1); }
+    if (sum/rx.length < 0.15) { best = r; break; } // first (longest) run that's a reasonably clean fit
+  }
 
   const runX = bx.slice(best.s,best.e+1), runZ = bz.slice(best.s,best.e+1);
 
