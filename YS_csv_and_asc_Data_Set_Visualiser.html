@@ -1,0 +1,931 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>YS .csv and .asc Data Set Visualiser</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  :root{
+    --bg: #0a0a0b;
+    --panel: #121214;
+    --panel-2: #17171a;
+    --border: #232327;
+    --border-lt: #2e2e34;
+    --text: #e8e8ea;
+    --text-dim: #7d7d85;
+    --text-faint: #55555c;
+    --red: #e5484d;
+    --red-dim: #7a2c2f;
+    --red-bg: #2a1416;
+    --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --mono: 'JetBrains Mono', 'Consolas', monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: var(--sans); font-size: 13px; overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  #app { display: flex; flex-direction: column; height: 100%; }
+  #top { display: flex; flex: 1 1 auto; min-height: 0; }
+
+  #sidebar {
+    width: 250px; flex-shrink: 0; background: var(--panel);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  #sidebarResizer { width: 5px; flex-shrink: 0; cursor: col-resize; background: transparent; position: relative; z-index: 5; }
+  #sidebarResizer:hover, #sidebarResizer.dragging { background: var(--red-dim); }
+
+  #brand { padding: 16px 16px 14px; border-bottom: 1px solid var(--border); }
+  #brand .mark { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13.5px; }
+  #brand .dot { width: 8px; height: 8px; border-radius: 2px; background: var(--red); box-shadow: 0 0 10px rgba(229,72,77,0.6); }
+  #brand .sub { margin-top: 3px; font-size: 10.5px; color: var(--text-dim); font-weight: 400; }
+
+  .sb-section { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .sb-title { font-size: 9.5px; letter-spacing: 0.13em; text-transform: uppercase; color: var(--text-faint); margin-bottom: 9px; font-weight: 600; }
+  button {
+    font-family: var(--sans); font-size: 11.5px; font-weight: 500; color: var(--text);
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 10px; cursor: pointer;
+    transition: border-color .13s, color .13s, background .13s;
+  }
+  button:hover { border-color: var(--red-dim); color: #fff; }
+  button.active { border-color: var(--red); color: var(--red); background: var(--red-bg); }
+  #folderBtn { width: 100%; text-align: center; }
+  .hint { font-size: 10.5px; color: var(--text-faint); margin-top: 8px; line-height: 1.5; }
+
+  #fileList { flex: 0 1 auto; max-height: 22vh; overflow-y: auto; padding: 4px 0; border-bottom: 1px solid var(--border); }
+  .file-item {
+    display: flex; align-items: center; justify-content: space-between; gap: 6px;
+    padding: 6px 16px; font-size: 11.5px; color: var(--text-dim);
+    cursor: pointer; white-space: nowrap; overflow: hidden;
+    border-left: 2px solid transparent; transition: background .1s, color .1s;
+  }
+  .file-item span.nm { overflow: hidden; text-overflow: ellipsis; }
+  .file-item:hover { background: var(--panel-2); color: var(--text); }
+  .file-item.active { color: var(--red); border-left-color: var(--red); background: var(--red-bg); }
+  .file-item .badge { font-family: var(--mono); font-size: 9.5px; color: var(--text-faint); background: var(--panel-2); border: 1px solid var(--border); border-radius: 3px; padding: 1px 5px; flex-shrink: 0; }
+  .empty-note { padding: 12px 16px; color: var(--text-faint); font-size: 11.5px; line-height: 1.55; }
+
+  #metrics { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
+  table.mt { border-collapse: collapse; width: 100%; font-size: 11.5px; }
+  table.mt td { padding: 5px 16px; border-bottom: 1px solid #1b1b1f; vertical-align: baseline; }
+  table.mt td:first-child { color: var(--text-dim); width: 56%; }
+  table.mt td:last-child { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--text); }
+  table.mt tr.hl td:last-child { color: var(--red); font-weight: 500; }
+  table.mt tr.subhead td { padding-top: 11px; color: var(--text-faint); font-size: 9.5px; letter-spacing: 0.13em; text-transform: uppercase; font-weight: 600; border-bottom: none; }
+  .fitnote { padding: 10px 16px 14px; font-size: 10.5px; color: var(--text-faint); line-height: 1.5; }
+  .fitnote.bad { color: var(--red); }
+
+  #viewport { position: relative; flex: 1; min-width: 0; }
+  canvas { display: block; }
+
+  #viewTitle {
+    position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+    font-size: 12px; font-weight: 600; color: var(--text);
+    background: rgba(18,18,20,0.88); border: 1px solid var(--border);
+    padding: 7px 16px; border-radius: 8px; pointer-events: none;
+    backdrop-filter: blur(6px); white-space: nowrap; max-width: 46%;
+    overflow: hidden; text-overflow: ellipsis; z-index: 3;
+  }
+  #viewTitle .file { color: var(--red); font-weight: 500; margin-left: 8px; }
+
+  #toolbar { position: absolute; top: 62px; left: 14px; right: 14px; display: flex; justify-content: space-between; gap: 10px; pointer-events: none; z-index: 2; }
+  #toolbar .group { display: flex; gap: 5px; background: rgba(18,18,20,0.88); padding: 5px; border-radius: 8px; border: 1px solid var(--border); pointer-events: auto; backdrop-filter: blur(6px); }
+  #toolbar .group button { min-width: 40px; }
+
+  #dropHint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-faint); font-size: 13px; pointer-events: none; z-index: 1; text-align: center; padding: 0 40px; }
+
+  #legendWrap { position: absolute; bottom: 18px; right: 18px; pointer-events: none; z-index: 2; }
+  #legendTitle { text-align: right; font-size: 9.5px; color: var(--text-dim); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 6px; }
+  #legend {
+    width: 20px; height: 180px; margin-left: auto;
+    border-radius: 5px; border: 1px solid var(--border-lt);
+    background: linear-gradient(to top, #0000e0 0%, #0080ff 20%, #00e5e5 35%, #00e050 50%, #f5e500 65%, #ff8000 80%, #e51616 100%);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5); position: relative;
+  }
+  #legend .lbl { position: absolute; right: 28px; font-size: 10px; color: var(--text-dim); font-family: var(--mono); white-space: nowrap; transform: translateY(-50%); }
+
+  #ellipseKey {
+    position: absolute; bottom: 18px; left: 18px; z-index: 2;
+    background: rgba(18,18,20,0.88); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 14px; font-size: 10.5px; color: var(--text-dim); backdrop-blur: 6px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  #ellipseKey .sw { width: 18px; height: 3px; background: #ffcc33; border-radius: 2px; }
+
+  input[type=file] { display: none; }
+
+  #batch {
+    flex-shrink: 0; background: var(--panel); border-top: 1px solid var(--border);
+    height: 32vh; max-height: 70vh; min-height: 44px; display: flex; flex-direction: column;
+  }
+  #batchResizer { height: 5px; flex-shrink: 0; cursor: row-resize; background: transparent; position: relative; z-index: 5; }
+  #batchResizer:hover, #batchResizer.dragging { background: var(--red-dim); }
+
+  #batchHead { display: flex; align-items: center; justify-content: space-between; padding: 10px 20px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  #batchHead .t { font-size: 12.5px; font-weight: 600; color: var(--text); }
+  #batchHead .t .n { color: var(--text-faint); font-weight: 400; margin-left: 8px; font-size: 11px; }
+
+  #batchBody { display: flex; overflow: hidden; min-height: 0; }
+  #batchBody.collapsed { display: none; }
+
+  #batchTableWrap { flex: 1.4; overflow: auto; border-right: 1px solid var(--border); }
+  table.bt { border-collapse: collapse; width: 100%; font-size: 11px; }
+  table.bt th, table.bt td { padding: 8px 14px; text-align: right; border-bottom: 1px solid #1b1b1f; font-family: var(--mono); white-space: nowrap; }
+  table.bt th { color: var(--red); font-weight: 600; text-transform: uppercase; font-size: 9.5px; letter-spacing: 0.05em; position: sticky; top: 0; background: var(--panel); }
+  table.bt td.l, table.bt th.l { text-align: left; font-family: var(--sans); }
+  table.bt tr:hover td { background: rgba(255,255,255,0.02); }
+  table.bt tr.bad td { color: var(--red); }
+
+  #batchStats { flex: 1; overflow-y: auto; padding: 14px 20px; }
+  .repgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .repbox { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .repbox .lbl { font-size: 9.5px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+  .repbox .val { font-size: 19px; font-weight: 700; color: var(--red); font-family: var(--mono); }
+  .repbox .unit { font-size: 10.5px; color: var(--text-dim); margin-top: 3px; }
+  .repbox.wide { grid-column: 1 / -1; }
+  #batchStats .grp-title { font-size: 10px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.1em; margin: 14px 0 8px; }
+  #batchStats .grp-title:first-child { margin-top: 0; }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-lt); border-radius: 4px; }
+</style>
+</head>
+<body>
+<div id="app">
+<div id="top">
+  <div id="sidebar">
+    <div id="brand">
+      <div class="mark"><span class="dot"></span>YS Data Set Visualiser</div>
+      <div class="sub">.csv / .asc viewer, direct ellipse fit</div>
+    </div>
+
+    <div class="sb-section">
+      <div class="sb-title">Data source</div>
+      <button id="folderBtn">Select files</button>
+      <input type="file" id="folderInput" accept=".csv,.asc,.txt" multiple>
+      <div class="hint">Select one file to inspect it, or several repeat scans of the same bore to compare how consistently the ellipse fit holds up.</div>
+    </div>
+
+    <div id="fileList">
+      <div class="empty-note">No files selected yet.</div>
+    </div>
+
+    <div id="metrics">
+      <table class="mt">
+        <tr class="subhead"><td colspan="2">Data set</td></tr>
+        <tr><td>Points</td><td id="statPoints">–</td></tr>
+        <tr><td>X range [mm]</td><td id="statX">–</td></tr>
+        <tr><td>Y range</td><td id="statY">–</td></tr>
+        <tr><td>Z range [mm]</td><td id="statZ">–</td></tr>
+
+        <tr class="subhead"><td colspan="2">Ellipse fit</td></tr>
+        <tr><td>Arc points used</td><td id="mArcPts">–</td></tr>
+        <tr><td>Outliers removed</td><td id="mOutliers">–</td></tr>
+        <tr><td>Centre (x, z)</td><td id="mCentre">–</td></tr>
+        <tr><td>Semi-axis (x dir)</td><td id="mAx">–</td></tr>
+        <tr><td>Semi-axis (z dir)</td><td id="mAz">–</td></tr>
+        <tr class="hl"><td>Fitted diameter</td><td id="mDfit">–</td></tr>
+      </table>
+      <div class="fitnote" id="fitNote">Load a file to fit an ellipse to the bore arc.</div>
+    </div>
+  </div>
+
+  <div id="sidebarResizer"></div>
+
+  <div id="viewport">
+    <div id="viewTitle">YS .csv and .asc Data Set Visualiser<span class="file" id="titleFile"></span></div>
+    <div id="toolbar">
+      <div class="group" id="viewGroup">
+        <button data-view="x" title="View from X axis">X</button>
+        <button data-view="y" title="View from Y axis">Y</button>
+        <button data-view="z" title="View from Z axis">Z</button>
+        <button id="fitBtn" title="Fit to full data set">Fit</button>
+        <button id="isoBtn" title="Reset to isometric">Iso</button>
+      </div>
+      <div class="group" id="projGroup">
+        <button id="perspBtn" class="active" data-proj="persp" title="Perspective projection">Perspective</button>
+        <button id="orthoBtn" data-proj="ortho" title="Orthographic projection">Orthographic</button>
+      </div>
+    </div>
+    <div id="dropHint">Select a file on the left to view it</div>
+    <div id="ellipseKey" style="display:none;"><span class="sw"></span>Fitted ellipse</div>
+    <div id="legendWrap">
+      <div id="legendTitle">Z coordinate</div>
+      <div id="legend">
+        <span class="lbl" id="legendMax" style="top:0%">–</span>
+        <span class="lbl" id="legendMid" style="top:50%">–</span>
+        <span class="lbl" id="legendMin" style="top:100%">–</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="batchResizer"></div>
+<div id="batch">
+  <div id="batchHead">
+    <div class="t">Batch repeatability <span class="n" id="batchN">no files loaded</span></div>
+    <button id="batchToggle">Hide</button>
+  </div>
+  <div id="batchBody">
+    <div id="batchTableWrap">
+      <table class="bt" id="batchTable">
+        <thead>
+          <tr>
+            <th class="l">File</th><th>Points</th><th>Arc pts</th><th>Outliers</th>
+            <th>Semi-axis x</th><th>Semi-axis z</th><th>Diameter</th>
+          </tr>
+        </thead>
+        <tbody id="batchTbody">
+          <tr><td class="l" colspan="7" style="color:var(--text-faint);font-family:var(--sans);">Load two or more files to compare the fitted diameter across scans.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div id="batchStats">
+      <div class="grp-title">Fitted diameter across scans</div>
+      <div class="repgrid">
+        <div class="repbox"><div class="lbl">Mean</div><div class="val" id="rMean">–</div><div class="unit">mm</div></div>
+        <div class="repbox"><div class="lbl">Std dev</div><div class="val" id="rStd">–</div><div class="unit">mm</div></div>
+        <div class="repbox"><div class="lbl">Range</div><div class="val" id="rRange">–</div><div class="unit">mm</div></div>
+        <div class="repbox"><div class="lbl">CV %</div><div class="val" id="rCv">–</div><div class="unit">coefficient of variation</div></div>
+      </div>
+      <div class="grp-title">Sample</div>
+      <div class="repgrid">
+        <div class="repbox wide"><div class="lbl">Scans with a successful fit</div><div class="val" id="rN" style="font-size:16px;">–</div><div class="unit">files where the ellipse solver converged</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<script>
+const canvasWrap = document.getElementById('viewport');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0a0b);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+canvasWrap.appendChild(renderer.domElement);
+
+const grid = new THREE.GridHelper(10, 10, 0x232327, 0x17171a);
+grid.visible = false;
+scene.add(grid);
+
+let pointCloud = null;
+let ellipseLine = null;
+let dataBounds = null;
+
+let perspCam, orthoCam, activeCam;
+(function makeCameras() {
+  const w = canvasWrap.clientWidth || 800, h = canvasWrap.clientHeight || 600;
+  const aspect = w / h;
+  perspCam = new THREE.PerspectiveCamera(45, aspect, 0.01, 100000);
+  const f = 5;
+  orthoCam = new THREE.OrthographicCamera(-f*aspect, f*aspect, f, -f, 0.01, 100000);
+  activeCam = perspCam;
+})();
+
+const controls = {
+  target: new THREE.Vector3(0,0,0),
+  spherical: { radius: 10, theta: Math.PI/4, phi: Math.PI/3 },
+  dragging: false, lastX: 0, lastY: 0, panMode: false
+};
+
+function updateCameraFromSpherical() {
+  const s = controls.spherical;
+  const spr = Math.sin(s.phi) * s.radius;
+  const pos = new THREE.Vector3(spr*Math.sin(s.theta), Math.cos(s.phi)*s.radius, spr*Math.cos(s.theta)).add(controls.target);
+  perspCam.position.copy(pos); perspCam.lookAt(controls.target);
+  orthoCam.position.copy(pos); orthoCam.lookAt(controls.target);
+}
+
+canvasWrap.addEventListener('mousedown', (e) => {
+  controls.dragging = true;
+  controls.panMode = e.button === 2 || e.shiftKey;
+  controls.lastX = e.clientX; controls.lastY = e.clientY;
+});
+window.addEventListener('mouseup', () => controls.dragging = false);
+canvasWrap.addEventListener('contextmenu', (e) => e.preventDefault());
+
+window.addEventListener('mousemove', (e) => {
+  if (!controls.dragging) return;
+  const dx = e.clientX - controls.lastX, dy = e.clientY - controls.lastY;
+  controls.lastX = e.clientX; controls.lastY = e.clientY;
+  if (controls.panMode) {
+    const panScale = controls.spherical.radius * 0.0015;
+    const dir = activeCam.getWorldDirection(new THREE.Vector3());
+    const right = new THREE.Vector3().crossVectors(dir, activeCam.up).normalize().negate();
+    const upActual = new THREE.Vector3().crossVectors(right, dir).normalize();
+    controls.target.addScaledVector(right, -dx * panScale);
+    controls.target.addScaledVector(upActual, dy * panScale);
+  } else {
+    controls.spherical.theta -= dx * 0.006;
+    controls.spherical.phi -= dy * 0.006;
+    controls.spherical.phi = Math.max(0.001, Math.min(Math.PI - 0.001, controls.spherical.phi));
+  }
+  updateCameraFromSpherical();
+});
+
+canvasWrap.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  controls.spherical.radius = Math.max(0.01, controls.spherical.radius * Math.exp(e.deltaY * 0.001));
+  updateCameraFromSpherical();
+  updateOrthoFrustum();
+}, { passive: false });
+
+function updateOrthoFrustum() {
+  const w = canvasWrap.clientWidth, h = canvasWrap.clientHeight;
+  const aspect = w / h;
+  const f = controls.spherical.radius * 0.5;
+  orthoCam.left = -f*aspect; orthoCam.right = f*aspect;
+  orthoCam.top = f; orthoCam.bottom = -f;
+  orthoCam.updateProjectionMatrix();
+}
+
+function resize() {
+  const w = canvasWrap.clientWidth, h = canvasWrap.clientHeight;
+  renderer.setSize(w, h);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  perspCam.aspect = w / h; perspCam.updateProjectionMatrix();
+  updateOrthoFrustum();
+}
+window.addEventListener('resize', resize);
+resize();
+updateCameraFromSpherical();
+
+let camTween = null;
+function shortestAngle(from, to) {
+  let d = (to - from) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return from + d;
+}
+function easeInOutCubic(t) { return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2; }
+function animateCamTo(opts, duration = 650) {
+  const s = controls.spherical;
+  camTween = {
+    t0: performance.now(), dur: duration,
+    fromTheta: s.theta, toTheta: opts.theta !== undefined ? shortestAngle(s.theta, opts.theta) : s.theta,
+    fromPhi: s.phi,     toPhi: opts.phi !== undefined ? opts.phi : s.phi,
+    fromR: s.radius,    toR: opts.radius !== undefined ? opts.radius : s.radius,
+    fromTarget: controls.target.clone(),
+    toTarget: opts.target ? opts.target.clone() : controls.target.clone()
+  };
+}
+function stepCamTween(now) {
+  if (!camTween) return;
+  let t = (now - camTween.t0) / camTween.dur;
+  if (t >= 1) t = 1;
+  const e = easeInOutCubic(t);
+  const s = controls.spherical;
+  s.theta = camTween.fromTheta + (camTween.toTheta - camTween.fromTheta) * e;
+  s.phi   = camTween.fromPhi   + (camTween.toPhi   - camTween.fromPhi)   * e;
+  s.radius= camTween.fromR     + (camTween.toR     - camTween.fromR)     * e;
+  controls.target.lerpVectors(camTween.fromTarget, camTween.toTarget, e);
+  updateCameraFromSpherical();
+  updateOrthoFrustum();
+  if (t >= 1) camTween = null;
+}
+(function animate(now) {
+  requestAnimationFrame(animate);
+  stepCamTween(now || performance.now());
+  renderer.render(scene, activeCam);
+})();
+
+document.getElementById('viewGroup').addEventListener('click', (e) => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  document.querySelectorAll('#viewGroup button[data-view]').forEach(b => b.classList.remove('active'));
+  if (btn.dataset.view) {
+    btn.classList.add('active');
+    const r = controls.spherical.radius;
+    if (btn.dataset.view === 'x') animateCamTo({ theta: Math.PI/2, phi: Math.PI/2, radius: r });
+    if (btn.dataset.view === 'y') animateCamTo({ theta: 0, phi: 0.0001, radius: r });
+    if (btn.dataset.view === 'z') animateCamTo({ theta: 0, phi: Math.PI/2, radius: r });
+  }
+  if (btn.id === 'fitBtn') fitToData();
+  if (btn.id === 'isoBtn') resetIso();
+});
+
+document.getElementById('projGroup').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-proj]'); if (!btn) return;
+  activeCam = btn.dataset.proj === 'persp' ? perspCam : orthoCam;
+  document.querySelectorAll('#projGroup button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+});
+
+function resetIso() {
+  const radius = dataBounds ? dataBounds.size * 1.6 : controls.spherical.radius;
+  animateCamTo({ theta: Math.PI/4, phi: Math.acos(1/Math.sqrt(3)), radius, target: controls.target }, 700);
+}
+function fitToData() {
+  if (!dataBounds) return;
+  animateCamTo({ radius: dataBounds.size * 1.4, target: dataBounds.center }, 700);
+}
+
+// ---- parsing ----
+function isNumeric(tok) { return tok !== '' && !isNaN(parseFloat(tok)) && isFinite(tok); }
+function splitTokens(line) { return line.trim().split(/[\s,;]+/).filter(t => t.length > 0); }
+
+function parsePointCloud(text) {
+  const rawLines = text.split(/\r\n|\n|\r/);
+  const blocks = []; let current = [];
+  for (const line of rawLines) {
+    if (line.trim() === '') { if (current.length) { blocks.push(current); current = []; } }
+    else current.push(line);
+  }
+  if (current.length) blocks.push(current);
+
+  const numericBlocks = blocks.map(b =>
+    b.filter(l => splitTokens(l).every(isNumeric) && splitTokens(l).length > 0)
+     .map(l => splitTokens(l).map(Number))
+  ).filter(rows => rows.length > 0);
+
+  if (numericBlocks.length >= 3) {
+    const [X, Y, Z] = numericBlocks;
+    const sameShape = X.length === Y.length && Y.length === Z.length &&
+      X.every((r,i) => r.length === Z[i].length) &&
+      X.every((r,i) => r.length === Y[i].length);
+    if (sameShape) {
+      const pts = [];
+      for (let i = 0; i < X.length; i++)
+        for (let j = 0; j < X[i].length; j++) {
+          const x = X[i][j], y = Y[i][j], z = Z[i][j];
+          if (isFinite(x) && isFinite(y) && isFinite(z)) pts.push(x, y, z);
+        }
+      if (pts.length > 0) return pts;
+    }
+  }
+
+  const pts = [];
+  for (const line of rawLines) {
+    const toks = splitTokens(line);
+    if (toks.length < 2) continue;
+    if (!toks.slice(0, 3).every(isNumeric)) continue;
+    const x = parseFloat(toks[0]);
+    const y = toks.length >= 3 ? parseFloat(toks[1]) : 0;
+    const z = toks.length >= 3 ? parseFloat(toks[2]) : parseFloat(toks[1]);
+    if (isFinite(x) && isFinite(y) && isFinite(z)) pts.push(x, y, z);
+  }
+  return pts;
+}
+
+/* ================= direct axis-aligned ellipse fit =================
+   The previous version allowed the ellipse to rotate freely (a general
+   5-parameter conic). On a shallow or slightly noisy arc that rotation
+   term is barely constrained by the data - many wildly different, tilted,
+   elongated ellipses can pass near a short weakly-curved arc almost
+   equally well in a least-squares sense, and the solver can (and did)
+   pick one of them: technically a valid ellipse, but with no resemblance
+   to the actual bore, which is why a plotted ellipse was seen jutting off
+   at a steep diagonal angle unrelated to the visible arc.
+
+   The theoretical model (tilt only stretches the z axis, it never shears
+   the cross-section) says the true ellipse should never be rotated in the
+   first place - so rotation was never a real degree of freedom to fit,
+   just a spurious one the solver could run away with on ambiguous data.
+   This fit removes it entirely: the ellipse is constrained axis-aligned
+   from the start, via a proper constrained generalised-eigenvalue solve
+   (still guaranteed to return a genuine ellipse, not a hack), which is
+   both physically correct and far more robust on shallow/noisy arcs. If
+   an arc genuinely can't support even this simpler fit, it now reports an
+   honest failure instead of drawing a nonsense shape.
+*/
+function mat3inv(m) {
+  const [a,b,c,d,e,f,g,h,i] = m;
+  const A = e*i-f*h, B = -(d*i-f*g), C = d*h-e*g;
+  const D = -(b*i-c*h), E = a*i-c*g, F = -(a*h-b*g);
+  const G = b*f-c*e, H = -(a*f-c*d), I = a*e-b*d;
+  const det = a*A + b*B + c*C;
+  if (Math.abs(det) < 1e-14) return null;
+  return [A,D,G, B,E,H, C,F,I].map(v => v/det);
+}
+function fitAxisAlignedEllipse(xs, zs) {
+  const n = xs.length;
+  if (n < 6) return null;
+  const D1 = [], D2 = [];
+  for (let i=0;i<n;i++) { D1.push([xs[i]*xs[i], zs[i]*zs[i]]); D2.push([xs[i], zs[i], 1]); }
+  const S1=[[0,0],[0,0]], S2=[[0,0,0],[0,0,0]], S3flat=new Array(9).fill(0);
+  for (let k=0;k<n;k++) {
+    for (let i=0;i<2;i++) {
+      for (let j=0;j<2;j++) S1[i][j]+=D1[k][i]*D1[k][j];
+      for (let j=0;j<3;j++) S2[i][j]+=D1[k][i]*D2[k][j];
+    }
+    for (let i=0;i<3;i++) for (let j=0;j<3;j++) S3flat[i*3+j]+=D2[k][i]*D2[k][j];
+  }
+  const S3inv = mat3inv(S3flat);
+  if (!S3inv) return null;
+  const T = [[0,0],[0,0],[0,0]];
+  for (let i=0;i<3;i++) for (let j=0;j<2;j++) {
+    let s=0; for (let k=0;k<3;k++) s += S3inv[i*3+k]*S2[j][k];
+    T[i][j] = -s;
+  }
+  const M = [[0,0],[0,0]];
+  for (let i=0;i<2;i++) for (let j=0;j<2;j++) {
+    let s = S1[i][j];
+    for (let k=0;k<3;k++) s += S2[i][k]*T[k][j];
+    M[i][j]=s;
+  }
+  const Mp = [[2*M[1][0], 2*M[1][1]], [2*M[0][0], 2*M[0][1]]];
+  const tr = Mp[0][0]+Mp[1][1], det = Mp[0][0]*Mp[1][1]-Mp[0][1]*Mp[1][0];
+  const disc = tr*tr-4*det;
+  if (disc < 0) return null;
+  const sq = Math.sqrt(disc);
+  const lambdas = [(tr+sq)/2, (tr-sq)/2];
+  let a1 = null;
+  for (const lambda of lambdas) {
+    let v;
+    if (Math.abs(Mp[0][1])>1e-12) v=[Mp[0][1], lambda-Mp[0][0]];
+    else if (Math.abs(Mp[1][0])>1e-12) v=[lambda-Mp[1][1], Mp[1][0]];
+    else v=[1,0];
+    if (v[0]*v[1] > 1e-12) { a1 = v; break; }
+  }
+  if (!a1) return null;
+  if (a1[0] < 0) { a1[0]=-a1[0]; a1[1]=-a1[1]; }
+  const a2 = [0,0,0];
+  for (let i=0;i<3;i++) for (let j=0;j<2;j++) a2[i]+=T[i][j]*a1[j];
+  const [A,C]=a1, [D,E,F]=a2;
+  const xc = -D/(2*A), zc = -E/(2*C);
+  const rhs = A*xc*xc + C*zc*zc - F;
+  if (rhs <= 0) return null;
+  const a = Math.sqrt(rhs/A), b = Math.sqrt(rhs/C);
+  return { xc, zc, a, b };
+}
+
+/* ---- isolate the bore-arc region before fitting (still required
+   preprocessing: the fit needs the bore points separated from the flat
+   shelf points either side, not a manual diameter calculation) ---- */
+function extractArc(positions) {
+  const n = positions.length / 3;
+  const NB = 256;
+  let minX=Infinity, maxX=-Infinity, minZ=Infinity, maxZ=-Infinity;
+  for (let i=0;i<n;i++) {
+    const x=positions[i*3], z=positions[i*3+2];
+    if(x<minX)minX=x; if(x>maxX)maxX=x;
+    if(z<minZ)minZ=z; if(z>maxZ)maxZ=z;
+  }
+  const spanX = maxX-minX, spanZ = maxZ-minZ;
+  if (spanX <= 0 || spanZ <= 0) return { ok:false, reason:'flat or degenerate profile' };
+
+  const bins = Array.from({length: NB}, () => []);
+  for (let i=0;i<n;i++) {
+    const x=positions[i*3], z=positions[i*3+2];
+    let b = Math.floor((x-minX)/spanX*NB); if (b===NB) b=NB-1;
+    bins[b].push(z);
+  }
+  const bx=[], bz=[];
+  for (let b=0;b<NB;b++) {
+    if (!bins[b].length) continue;
+    bins[b].sort((a,c)=>a-c);
+    bx.push(minX + (b+0.5)*spanX/NB);
+    bz.push(bins[b][Math.floor(bins[b].length/2)]);
+  }
+  if (bz.length < 10) return { ok:false, reason:'too few populated bins across x' };
+
+  const sorted=[...bz].sort((a,c)=>a-c);
+  const baseline=sorted[Math.floor(sorted.length/2)];
+  const thresh=0.2*spanZ;
+
+  let best={s:-1,e:-1,len:0}, s=-1;
+  for (let i=0;i<=bz.length;i++) {
+    const dev = i<bz.length && Math.abs(bz[i]-baseline)>thresh;
+    if (dev && s<0) s=i;
+    if (!dev && s>=0) { if (i-s>best.len) best={s,e:i-1,len:i-s}; s=-1; }
+  }
+  if (best.len < 6) return { ok:false, reason:'no arc region detected (need >=6 bins)' };
+
+  return { ok:true, ax: bx.slice(best.s,best.e+1), az: bz.slice(best.s,best.e+1), minX, maxX, minZ, maxZ };
+}
+
+/* ---- robust outlier rejection between the two fit passes ----
+   extractArc()'s per-bin medians already knock down a lot of noise, but a
+   single bin can still be dragged off the true bore surface (e.g. a
+   reflection spike or an edge/shelf point leaking into the arc region).
+   A single fit is unweighted least squares, so a handful of such bins can
+   still visibly bias the centre/radii. Fix: fit once, score every arc
+   point by how far it sits from that ellipse in normalised radial terms
+   (1.0 = exactly on the ellipse), reject points whose deviation is a
+   MAD-based outlier, and refit on the survivors. If rejection would leave
+   too few points (or the refit fails to converge), the first-pass fit is
+   kept rather than discarded - this only ever removes points, never
+   invents a fit that direct fitting couldn't produce.
+*/
+function rejectOutliersAndRefit(ax, az, fit0) {
+  const n = ax.length;
+  const resid = new Array(n);
+  for (let i=0;i<n;i++) {
+    const dx=(ax[i]-fit0.xc)/fit0.a, dz=(az[i]-fit0.zc)/fit0.b;
+    resid[i] = Math.abs(Math.sqrt(dx*dx+dz*dz) - 1);
+  }
+  const sorted=[...resid].sort((p,q)=>p-q);
+  const median = sorted[Math.floor(sorted.length/2)];
+  const absDev = resid.map(r=>Math.abs(r-median)).sort((p,q)=>p-q);
+  const mad = absDev[Math.floor(absDev.length/2)] || 1e-9;
+  const scale = 1.4826*mad; // normal-consistent estimate of sigma
+  const threshold = median + Math.max(3.5*scale, 0.02); // floor avoids over-pruning near-perfect fits
+  const keepAx=[], keepAz=[];
+  for (let i=0;i<n;i++) if (resid[i] <= threshold) { keepAx.push(ax[i]); keepAz.push(az[i]); }
+
+  const removed = n - keepAx.length;
+  const minKeep = Math.max(6, Math.floor(n*0.5));
+  if (removed === 0 || keepAx.length < minKeep) return { fit: fit0, ax, az, removed: 0 };
+
+  const fit1 = fitAxisAlignedEllipse(keepAx, keepAz);
+  if (!fit1) return { fit: fit0, ax, az, removed: 0 };
+  return { fit: fit1, ax: keepAx, az: keepAz, removed };
+}
+
+function fitBore(positions) {
+  const arc = extractArc(positions);
+  if (!arc.ok) return { ok:false, reason: arc.reason };
+
+  const fit0 = fitAxisAlignedEllipse(arc.ax, arc.az);
+  if (!fit0) return { ok:false, reason:'ellipse solver did not converge (arc too shallow or too noisy for a stable fit)', arcPts: arc.ax.length };
+
+  const refined = rejectOutliersAndRefit(arc.ax, arc.az, fit0);
+  const fit = refined.fit;
+
+  return {
+    ok:true, arcPts: refined.ax.length, outliersRemoved: refined.removed,
+    xc: fit.xc, zc: fit.zc, axisX: fit.a, axisZ: fit.b,
+    diameter: 2*fit.a
+  };
+}
+
+// ---- ellipse overlay curve generation (always axis-aligned, no rotation) ----
+function makeEllipsePoints(fit, y) {
+  const pts = [];
+  const N = 96;
+  for (let i=0;i<=N;i++) {
+    const t = (i/N)*Math.PI*2;
+    const x = fit.xc + fit.axisX*Math.cos(t);
+    const z = fit.zc + fit.axisZ*Math.sin(t);
+    pts.push(new THREE.Vector3(x, y, z));
+  }
+  return pts;
+}
+
+// ---- scene load ----
+function loadPointsIntoScene(flatArr, filename) {
+  if (pointCloud) { scene.remove(pointCloud); pointCloud.geometry.dispose(); pointCloud.material.dispose(); pointCloud = null; }
+  if (ellipseLine) { scene.remove(ellipseLine); ellipseLine.geometry.dispose(); ellipseLine.material.dispose(); ellipseLine = null; }
+  document.getElementById('ellipseKey').style.display = 'none';
+
+  const n = flatArr.length / 3;
+  setText('statPoints', n.toLocaleString());
+
+  if (n === 0) {
+    document.getElementById('statX').innerHTML = '<span style="color:var(--red)">no numeric points</span>';
+    setText('statY','–'); setText('statZ','–');
+    showHint('Could not parse any points from "' + filename + '"');
+    clearMetrics('–');
+    return;
+  }
+  document.getElementById('dropHint').style.display = 'none';
+
+  const positions = new Float32Array(flatArr);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+  let minX=Infinity,minY=Infinity,minZ=Infinity,maxX=-Infinity,maxY=-Infinity,maxZ=-Infinity;
+  for (let i = 0; i < positions.length; i += 3) {
+    const x=positions[i],y=positions[i+1],z=positions[i+2];
+    if(x<minX)minX=x; if(x>maxX)maxX=x;
+    if(y<minY)minY=y; if(y>maxY)maxY=y;
+    if(z<minZ)minZ=z; if(z>maxZ)maxZ=z;
+  }
+  const center = new THREE.Vector3((minX+maxX)/2,(minY+maxY)/2,(minZ+maxZ)/2);
+  const size = Math.max(maxX-minX, maxY-minY, maxZ-minZ, 0.001);
+  dataBounds = { min:{x:minX,y:minY,z:minZ}, max:{x:maxX,y:maxY,z:maxZ}, center, size };
+
+  setText('statX', fmt(minX)+' to '+fmt(maxX));
+  setText('statY', fmt(minY)+' to '+fmt(maxY));
+  setText('statZ', fmt(minZ)+' to '+fmt(maxZ));
+
+  const colors = new Float32Array(n * 3);
+  const tmp = new THREE.Color();
+  for (let i = 0; i < n; i++) {
+    const t = (maxZ-minZ) > 1e-9 ? (positions[i*3+2]-minZ)/(maxZ-minZ) : 0.5;
+    jetColor(t, tmp);
+    colors[i*3]=tmp.r; colors[i*3+1]=tmp.g; colors[i*3+2]=tmp.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  setText('legendMax', fmt(maxZ));
+  setText('legendMid', fmt((minZ+maxZ)/2));
+  setText('legendMin', fmt(minZ));
+  setText('titleFile', '— ' + filename);
+
+  const mat = new THREE.PointsMaterial({ size: Math.max(size*0.003, 0.003), vertexColors: true });
+  pointCloud = new THREE.Points(geo, mat);
+  scene.add(pointCloud);
+
+  grid.visible = true;
+  grid.scale.setScalar(size / 5);
+  grid.position.set(center.x, minY, center.z);
+
+  const fit = fitBore(positions);
+  renderSingleMetrics(fit);
+
+  if (fit.ok) {
+    const yFor = (minY+maxY)/2;
+    const ellPts = makeEllipsePoints(fit, yFor);
+    const ellGeo = new THREE.BufferGeometry().setFromPoints(ellPts);
+    const ellMat = new THREE.LineBasicMaterial({ color: 0xffcc33, linewidth: 2 });
+    ellipseLine = new THREE.Line(ellGeo, ellMat);
+    scene.add(ellipseLine);
+    document.getElementById('ellipseKey').style.display = 'flex';
+  }
+
+  fitToData();
+}
+
+function jetColor(t, out) {
+  t = Math.max(0, Math.min(1, t));
+  const s = [
+    [0.00,0,0,224],[0.20,0,128,255],[0.35,0,229,229],[0.50,0,224,80],
+    [0.65,245,229,0],[0.80,255,128,0],[1.00,229,22,22]
+  ];
+  let a=s[0], b=s[s.length-1];
+  for (let i=0;i<s.length-1;i++) if (t>=s[i][0] && t<=s[i+1][0]) { a=s[i]; b=s[i+1]; break; }
+  const f=(t-a[0])/((b[0]-a[0])||1);
+  out.setRGB((a[1]+(b[1]-a[1])*f)/255,(a[2]+(b[2]-a[2])*f)/255,(a[3]+(b[3]-a[3])*f)/255);
+  return out;
+}
+
+function renderSingleMetrics(fit) {
+  const note = document.getElementById('fitNote');
+  if (!fit.ok) {
+    clearMetrics('–');
+    setText('mArcPts', fit.arcPts !== undefined ? String(fit.arcPts) : '–');
+    setText('mOutliers', '–');
+    note.textContent = 'Ellipse fit failed: ' + (fit.reason || 'unknown reason') + '.';
+    note.classList.add('bad');
+    return;
+  }
+  note.classList.remove('bad');
+  note.textContent = fit.outliersRemoved > 0
+    ? `Fit converged. ${fit.outliersRemoved} arc bin${fit.outliersRemoved===1?'':'s'} rejected as outliers and refitted. Curve drawn in yellow in the viewport.`
+    : 'Fit converged. Curve drawn in yellow in the viewport.';
+  setText('mArcPts', String(fit.arcPts));
+  setText('mOutliers', String(fit.outliersRemoved || 0));
+  setText('mCentre', fit.xc.toFixed(3) + ', ' + fit.zc.toFixed(3));
+  setText('mAx', fit.axisX.toFixed(4));
+  setText('mAz', fit.axisZ.toFixed(4));
+  setText('mDfit', fit.diameter.toFixed(4));
+}
+function clearMetrics() {
+  ['mCentre','mAx','mAz','mDfit'].forEach(id => setText(id, '–'));
+}
+
+
+function setText(id, v) { document.getElementById(id).textContent = v; }
+function fmt(v) { return Math.abs(v) >= 1000 ? v.toFixed(0) : v.toFixed(3); }
+function showHint(msg) {
+  const el = document.getElementById('dropHint');
+  el.style.display = 'flex'; el.textContent = msg;
+}
+
+/* ================= batch repeatability ================= */
+let batchResults = [];
+
+function renderBatch() {
+  const n = batchResults.length;
+  setText('batchN', n === 0 ? 'no files loaded' : (n === 1 ? '1 file loaded' : n + ' files loaded'));
+
+  const tbody = document.getElementById('batchTbody');
+  if (n === 0) {
+    tbody.innerHTML = '<tr><td class="l" colspan="7" style="color:var(--text-faint);font-family:var(--sans);">Load two or more files to compare the fitted diameter across scans.</td></tr>';
+  } else {
+    tbody.innerHTML = batchResults.map(r => {
+      if (!r.ok) {
+        return `<tr class="bad"><td class="l">${r.name}</td><td colspan="6">${r.reason || 'failed to parse'}</td></tr>`;
+      }
+      return `<tr>
+        <td class="l">${r.name}</td>
+        <td>${r.n.toLocaleString()}</td>
+        <td>${r.arcPts}</td>
+        <td>${r.outliersRemoved || 0}</td>
+        <td>${r.axisX.toFixed(4)}</td>
+        <td>${r.axisZ.toFixed(4)}</td>
+        <td>${r.diameter.toFixed(4)}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  const ok = batchResults.filter(r => r.ok);
+  fillRepStats(ok.map(r => r.diameter));
+  setText('rN', ok.length + ' / ' + n);
+}
+
+function fillRepStats(vals) {
+  if (vals.length === 0) { ['rMean','rStd','rRange','rCv'].forEach(id => setText(id, '–')); return; }
+  const mean = vals.reduce((a,b)=>a+b,0) / vals.length;
+  const variance = vals.length > 1 ? vals.reduce((a,b)=>a+(b-mean)*(b-mean),0)/(vals.length-1) : 0;
+  const std = Math.sqrt(variance);
+  const range = Math.max(...vals) - Math.min(...vals);
+  const cv = mean !== 0 ? (100*std/mean) : 0;
+  setText('rMean', mean.toFixed(4));
+  setText('rStd', std.toFixed(4));
+  setText('rRange', range.toFixed(4));
+  setText('rCv', cv.toFixed(3)+'%');
+}
+
+document.getElementById('batchToggle').addEventListener('click', (e) => {
+  const body = document.getElementById('batchBody');
+  body.classList.toggle('collapsed');
+  e.target.textContent = body.classList.contains('collapsed') ? 'Show' : 'Hide';
+});
+
+// ---- resizable panels ----
+(function setupResizers() {
+  const sidebar = document.getElementById('sidebar');
+  const sidebarResizer = document.getElementById('sidebarResizer');
+  let draggingSidebar = false;
+  sidebarResizer.addEventListener('mousedown', (e) => {
+    draggingSidebar = true; sidebarResizer.classList.add('dragging');
+    document.body.style.cursor = 'col-resize'; e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!draggingSidebar) return;
+    const min = 200, max = Math.min(560, window.innerWidth * 0.6);
+    sidebar.style.width = Math.max(min, Math.min(max, e.clientX)) + 'px';
+    resize();
+  });
+  window.addEventListener('mouseup', () => {
+    if (draggingSidebar) { draggingSidebar = false; sidebarResizer.classList.remove('dragging'); document.body.style.cursor = ''; resize(); }
+  });
+
+  const batch = document.getElementById('batch');
+  const batchResizer = document.getElementById('batchResizer');
+  let draggingBatch = false;
+  batchResizer.addEventListener('mousedown', (e) => {
+    draggingBatch = true; batchResizer.classList.add('dragging');
+    document.body.style.cursor = 'row-resize'; e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!draggingBatch) return;
+    const min = 44, max = window.innerHeight * 0.75;
+    batch.style.height = Math.max(min, Math.min(max, window.innerHeight - e.clientY)) + 'px';
+    resize();
+  });
+  window.addEventListener('mouseup', () => {
+    if (draggingBatch) { draggingBatch = false; batchResizer.classList.remove('dragging'); document.body.style.cursor = ''; resize(); }
+  });
+})();
+
+// ---- file handling ----
+const folderInput = document.getElementById('folderInput');
+document.getElementById('folderBtn').addEventListener('click', () => folderInput.click());
+
+folderInput.addEventListener('change', async (e) => {
+  const files = Array.from(e.target.files).filter(f => /\.(csv|asc|txt)$/i.test(f.name));
+  const listEl = document.getElementById('fileList');
+  listEl.innerHTML = '';
+  batchResults = [];
+
+  if (files.length === 0) {
+    listEl.innerHTML = '<div class="empty-note">No .csv / .asc / .txt files were selected.</div>';
+    renderBatch();
+    return;
+  }
+  files.sort((a,b) => a.name.localeCompare(b.name, undefined, {numeric:true}));
+
+  for (const file of files) {
+    try {
+      const text = await file.text();
+      const flat = parsePointCloud(text);
+      const positions = new Float32Array(flat);
+      const fit = fitBore(positions);
+      batchResults.push(Object.assign({ name: file.name, positions, n: flat.length/3 }, fit));
+    } catch (err) {
+      batchResults.push({ name: file.name, ok:false, reason: 'read error' });
+    }
+  }
+
+  files.forEach((file, i) => {
+    const r = batchResults[i];
+    const item = document.createElement('div');
+    item.className = 'file-item';
+    item.title = file.name;
+    const badge = r && r.ok ? ('D ' + r.diameter.toFixed(2)) : '—';
+    item.innerHTML = `<span class="nm">${file.name}</span><span class="badge">${badge}</span>`;
+    item.addEventListener('click', () => {
+      document.querySelectorAll('.file-item').forEach(el => el.classList.remove('active'));
+      item.classList.add('active');
+      loadPointsIntoScene(Array.from(batchResults[i].positions || []), file.name);
+    });
+    listEl.appendChild(item);
+  });
+
+  listEl.firstChild.classList.add('active');
+  loadPointsIntoScene(Array.from(batchResults[0].positions || []), files[0].name);
+
+  renderBatch();
+});
+</script>
+</body>
+</html>
