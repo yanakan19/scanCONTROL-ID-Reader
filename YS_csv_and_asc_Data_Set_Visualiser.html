@@ -194,7 +194,6 @@
 
         <tr class="subhead"><td colspan="2">Ellipse fit</td></tr>
         <tr><td>Arc points used</td><td id="mArcPts">–</td></tr>
-        <tr><td>Outliers removed</td><td id="mOutliers">–</td></tr>
         <tr><td>Centre (x, z)</td><td id="mCentre">–</td></tr>
         <tr><td>Semi-axis (x dir)</td><td id="mAx">–</td></tr>
         <tr><td>Semi-axis (z dir)</td><td id="mAz">–</td></tr>
@@ -252,12 +251,12 @@
       <table class="bt" id="batchTable">
         <thead>
           <tr>
-            <th class="l">File</th><th>Points</th><th>Arc pts</th><th>Outliers</th>
+            <th class="l">File</th><th>Points</th><th>Arc pts</th>
             <th>Semi-axis x</th><th>Semi-axis z</th><th>Diameter</th>
           </tr>
         </thead>
         <tbody id="batchTbody">
-          <tr><td class="l" colspan="7" style="color:var(--text-faint);font-family:var(--sans);">Load two or more files to compare the fitted diameter across scans.</td></tr>
+          <tr><td class="l" colspan="6" style="color:var(--text-faint);font-family:var(--sans);">Load two or more files to compare the fitted diameter across scans.</td></tr>
         </tbody>
       </table>
     </div>
@@ -615,156 +614,33 @@ function extractArc(positions) {
   return { ok:true, ax: bx.slice(best.s,best.e+1), az: bz.slice(best.s,best.e+1), minX, maxX, minZ, maxZ };
 }
 
-/* ---- robust outlier rejection between the two fit passes ----
-   extractArc()'s per-bin medians already knock down a lot of noise, but a
-   single bin can still be dragged off the true bore surface (e.g. a
-   reflection spike or an edge/shelf point leaking into the arc region).
-   A single fit is unweighted least squares, so a handful of such bins can
-   still visibly bias the centre/radii. Fix: fit once, score every arc
-   point by how far it sits from that ellipse in normalised radial terms
-   (1.0 = exactly on the ellipse), reject points whose deviation is a
-   MAD-based outlier, and refit on the survivors. If rejection would leave
-   too few points (or the refit fails to converge), the first-pass fit is
-   kept rather than discarded - this only ever removes points, never
-   invents a fit that direct fitting couldn't produce.
-*/
-function rejectOutliersAndRefit(ax, az, fit0) {
-  const n = ax.length;
-  const resid = new Array(n);
-  for (let i=0;i<n;i++) {
-    const dx=(ax[i]-fit0.xc)/fit0.a, dz=(az[i]-fit0.zc)/fit0.b;
-    resid[i] = Math.abs(Math.sqrt(dx*dx+dz*dz) - 1);
-  }
-  const sorted=[...resid].sort((p,q)=>p-q);
-  const median = sorted[Math.floor(sorted.length/2)];
-  const absDev = resid.map(r=>Math.abs(r-median)).sort((p,q)=>p-q);
-  const mad = absDev[Math.floor(absDev.length/2)] || 1e-9;
-  const scale = 1.4826*mad; // normal-consistent estimate of sigma
-  const threshold = median + Math.max(3.5*scale, 0.02); // floor avoids over-pruning near-perfect fits
-  const keepAx=[], keepAz=[];
-  for (let i=0;i<n;i++) if (resid[i] <= threshold) { keepAx.push(ax[i]); keepAz.push(az[i]); }
-
-  const removed = n - keepAx.length;
-  const minKeep = Math.max(6, Math.floor(n*0.5));
-  if (removed === 0 || keepAx.length < minKeep) return { fit: fit0, ax, az, removed: 0 };
-
-  const fit1 = fitAxisAlignedEllipse(keepAx, keepAz);
-  if (!fit1) return { fit: fit0, ax, az, removed: 0 };
-  return { fit: fit1, ax: keepAx, az: keepAz, removed };
-}
-
 /* ================= chord-sagitta cross-check =================
-   Independent second estimate of the bore diameter, derived from the
-   idealised-graph / Pythagoras construction:
+   Independent second estimate of the bore diameter, derived directly
+   from the idealised-graph / Pythagoras construction with no cleaning
+   or preprocessing beyond what extractArc already does:
 
      r_true^2 = (w_scan/2)^2 + (r_true - h_true)^2
      r_true   = w_scan^2/(8*h_true) + h_true/2
      D_true   = w_scan^2/(4*h_true) + h_true
 
-   where w_scan (chord width) is read directly off the scan's x-axis
-   (tilt-immune, so w_scan = w_true with no correction needed) and
-   h_true corrects the raw scanned sagitta height h_scan for tilt.
+   w_scan = full x-extent of the arc region extractArc found (tilt-immune,
+   so w_scan = w_true with no correction needed).
+   h_scan = the arc's peak deviation from the average of its own two
+   endpoint z-values (the current simplifying assumption: both endpoints
+   sit at the same z).
+   h_true = h_scan corrected for tilt.
 
-   theta_tilt is not asked of the user (kept consistent with the
-   ellipse-fit path, which never requires manual tilt input): it is
-   derived from the primary ellipse fit's own axis ratio. The fitted
-   diameter has always been taken as 2*axisX (x is the tilt-immune
-   ground-truth axis), so cos(theta_tilt) = axisZ / axisX, i.e. axisZ is
-   treated as the tilted/foreshortened axis relative to axisX.
-
-   NOTE: on the real scanCONTROL CSVs used to validate this tool,
-   axisX > axisZ consistently (~1.5x) - the *opposite* of what an
-   earlier version of this file's fit-model comment assumed (it claimed
-   z is stretched by 1/cos(theta) and so should end up larger than x).
-   This cross-check follows the axis convention the tool already commits
-   to via its primary diameter (2*axisX), not that older comment. Worth
-   re-confirming against the physical scanner/axis setup - if x is
-   actually the tilted axis rather than z, the roles here should swap.
-
-   The two arc endpoints (as selected by extractArc's threshold) rarely
-   sit at exactly the same z in noisy real data, and extractArc's region
-   itself can run wider on one side than the true rim crossing. Rather
-   than assume the endpoints already match, trimArcToMatchedBaseline()
-   below finds the largest sub-arc whose two ends do match: it tries
-   anchoring the baseline to each endpoint in turn, trims the *other*
-   side inward to the nearest point at that same z, and keeps whichever
-   of the two trims retains more width. This both enforces the
-   equal-endpoint-z assumption and discards whatever noisy excess made
-   the untrimmed side run wider than its partner - a legitimate arc
-   should be roughly symmetric about its peak, so the smaller side is
-   taken as ground truth for where the true chord ends.
-
-   Validated against real scanCONTROL data (1_1.csv etc.), extractArc's
-   20%-of-span threshold pulls in points beyond the true bore surface -
-   most likely a chamfer/blend radius where the flat back wall meets the
-   bore, common on real machined bushings/flanges. Those points are
-   provably not on the fitted circle (a point genuinely on the ellipse
-   can never have |x - xc| > a), so restrictArcToEllipseXRange() drops
-   them before the baseline-matching trim runs, rather than tuning an
-   arbitrary edge margin.
+   theta_tilt is not asked of the user: it is derived from the primary
+   ellipse fit's own axis ratio, cos(theta_tilt) = axisZ / axisX, since
+   the fitted diameter is taken as 2*axisX (x is the tilt-immune,
+   ground-truth axis) and axisZ is the tilted/foreshortened axis.
 */
-function restrictArcToEllipseXRange(ax, az, fit) {
-  const lo = fit.xc - fit.a, hi = fit.xc + fit.a;
-  const keepAx = [], keepAz = [];
-  for (let i = 0; i < ax.length; i++) {
-    if (ax[i] >= lo && ax[i] <= hi) { keepAx.push(ax[i]); keepAz.push(az[i]); }
-  }
-  return keepAx.length >= 4 ? { ax: keepAx, az: keepAz } : { ax, az };
-}
-
-function trimArcToMatchedBaseline(ax, az) {
-  const n = ax.length;
-  if (n < 4) return { ax, az, baselineZ: (az[0] + az[n-1]) / 2 };
-  const mid = Math.floor(n / 2);
-
-  // Anchor each end on a small local average, not a single bin - single-bin
-  // z readings right at the rim are the most exposed to per-bin noise, and
-  // real scan data (checked on 1_1-1_5) shows z varying smoothly all the way
-  // to the tips with no flat/noisy plateau to crop away, so a window average
-  // is used to steady the anchor instead of discarding data outright.
-  const win = Math.max(1, Math.min(3, Math.floor(n / 10)));
-  const mean = arr => arr.reduce((s,v)=>s+v,0) / arr.length;
-  const zLeftAnchor = mean(az.slice(0, win));
-  const zRightAnchor = mean(az.slice(n - win));
-
-  // anchor on the left end's z; find where the right tail best matches it
-  let rightMatch = n - 1, bestDR = Math.abs(az[n-1] - zLeftAnchor);
-  for (let i = n - 2; i >= mid; i--) {
-    const d = Math.abs(az[i] - zLeftAnchor);
-    if (d < bestDR) { bestDR = d; rightMatch = i; }
-  }
-  const widthAnchorLeft = ax[rightMatch] - ax[0];
-
-  // anchor on the right end's z; find where the left tail best matches it
-  let leftMatch = 0, bestDL = Math.abs(az[0] - zRightAnchor);
-  for (let i = 1; i <= mid; i++) {
-    const d = Math.abs(az[i] - zRightAnchor);
-    if (d < bestDL) { bestDL = d; leftMatch = i; }
-  }
-  const widthAnchorRight = ax[n-1] - ax[leftMatch];
-
-  // keep whichever anchoring retains the larger (more data-supported) width;
-  // baseline is the average of the fixed end's smoothed anchor and the
-  // matched point's own z (a single value, since it was chosen to already
-  // agree with the anchor - no averaging needed there)
-  let s, e, baselineZ;
-  if (widthAnchorLeft >= widthAnchorRight) {
-    s = 0; e = rightMatch; baselineZ = (zLeftAnchor + az[rightMatch]) / 2;
-  } else {
-    s = leftMatch; e = n - 1; baselineZ = (az[leftMatch] + zRightAnchor) / 2;
-  }
-  if (e <= s) return { ax, az, baselineZ: (az[0] + az[n-1]) / 2 };
-  return { ax: ax.slice(s, e + 1), az: az.slice(s, e + 1), baselineZ };
-}
-
-function computeSagittaCrossCheck(axRaw, azRaw, fit) {
-  if (axRaw.length < 4) return null;
-  const restricted = restrictArcToEllipseXRange(axRaw, azRaw, fit);
-  const { ax, az, baselineZ } = trimArcToMatchedBaseline(restricted.ax, restricted.az);
+function computeSagittaCrossCheck(ax, az, fit) {
   const n = ax.length;
   if (n < 2) return null;
 
   const wScan = ax[n-1] - ax[0];
+  const baselineZ = (az[0] + az[n-1]) / 2;
   let hScan = 0;
   for (let i = 0; i < n; i++) {
     const d = Math.abs(az[i] - baselineZ);
@@ -787,16 +663,13 @@ function fitBore(positions) {
   const arc = extractArc(positions);
   if (!arc.ok) return { ok:false, reason: arc.reason };
 
-  const fit0 = fitAxisAlignedEllipse(arc.ax, arc.az);
-  if (!fit0) return { ok:false, reason:'ellipse solver did not converge (arc too shallow or too noisy for a stable fit)', arcPts: arc.ax.length };
+  const fit = fitAxisAlignedEllipse(arc.ax, arc.az);
+  if (!fit) return { ok:false, reason:'ellipse solver did not converge (arc too shallow or too noisy for a stable fit)', arcPts: arc.ax.length };
 
-  const refined = rejectOutliersAndRefit(arc.ax, arc.az, fit0);
-  const fit = refined.fit;
-
-  const sagitta = computeSagittaCrossCheck(refined.ax, refined.az, fit);
+  const sagitta = computeSagittaCrossCheck(arc.ax, arc.az, fit);
 
   return {
-    ok:true, arcPts: refined.ax.length, outliersRemoved: refined.removed,
+    ok:true, arcPts: arc.ax.length,
     xc: fit.xc, zc: fit.zc, axisX: fit.a, axisZ: fit.b,
     diameter: 2*fit.a,
     sagitta
@@ -909,17 +782,13 @@ function renderSingleMetrics(fit) {
   if (!fit.ok) {
     clearMetrics('–');
     setText('mArcPts', fit.arcPts !== undefined ? String(fit.arcPts) : '–');
-    setText('mOutliers', '–');
     note.textContent = 'Ellipse fit failed: ' + (fit.reason || 'unknown reason') + '.';
     note.classList.add('bad');
     return;
   }
   note.classList.remove('bad');
-  note.textContent = fit.outliersRemoved > 0
-    ? `Fit converged. ${fit.outliersRemoved} arc bin${fit.outliersRemoved===1?'':'s'} rejected as outliers and refitted. Curve drawn in yellow in the viewport.`
-    : 'Fit converged. Curve drawn in yellow in the viewport.';
+  note.textContent = 'Fit converged. Curve drawn in yellow in the viewport.';
   setText('mArcPts', String(fit.arcPts));
-  setText('mOutliers', String(fit.outliersRemoved || 0));
   setText('mCentre', fit.xc.toFixed(3) + ', ' + fit.zc.toFixed(3));
   setText('mAx', fit.axisX.toFixed(4));
   setText('mAz', fit.axisZ.toFixed(4));
@@ -958,17 +827,16 @@ function renderBatch() {
 
   const tbody = document.getElementById('batchTbody');
   if (n === 0) {
-    tbody.innerHTML = '<tr><td class="l" colspan="7" style="color:var(--text-faint);font-family:var(--sans);">Load two or more files to compare the fitted diameter across scans.</td></tr>';
+    tbody.innerHTML = '<tr><td class="l" colspan="6" style="color:var(--text-faint);font-family:var(--sans);">Load two or more files to compare the fitted diameter across scans.</td></tr>';
   } else {
     tbody.innerHTML = batchResults.map(r => {
       if (!r.ok) {
-        return `<tr class="bad"><td class="l">${r.name}</td><td colspan="6">${r.reason || 'failed to parse'}</td></tr>`;
+        return `<tr class="bad"><td class="l">${r.name}</td><td colspan="5">${r.reason || 'failed to parse'}</td></tr>`;
       }
       return `<tr>
         <td class="l">${r.name}</td>
         <td>${r.n.toLocaleString()}</td>
         <td>${r.arcPts}</td>
-        <td>${r.outliersRemoved || 0}</td>
         <td>${r.axisX.toFixed(4)}</td>
         <td>${r.axisZ.toFixed(4)}</td>
         <td>${r.diameter.toFixed(4)}</td>
