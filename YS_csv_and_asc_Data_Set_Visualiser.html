@@ -195,8 +195,8 @@
         <tr class="subhead"><td colspan="2">Ellipse fit</td></tr>
         <tr><td>Arc points used</td><td id="mArcPts">–</td></tr>
         <tr><td>Centre (x, z)</td><td id="mCentre">–</td></tr>
-        <tr><td>Semi-axis (x dir)</td><td id="mAx">–</td></tr>
-        <tr><td>Semi-axis (z dir)</td><td id="mAz">–</td></tr>
+        <tr><td>Semi-major axis</td><td id="mAx">–</td></tr>
+        <tr><td>Semi-minor axis</td><td id="mAz">–</td></tr>
         <tr class="hl"><td>Fitted diameter</td><td id="mDfit">–</td></tr>
 
         <tr class="subhead"><td colspan="2">Cross-check (chord–sagitta)</td></tr>
@@ -252,7 +252,7 @@
         <thead>
           <tr>
             <th class="l">File</th><th>Points</th><th>Arc pts</th>
-            <th>Semi-axis x</th><th>Semi-axis z</th><th>Diameter</th>
+            <th>Semi-major</th><th>Semi-minor</th><th>Diameter</th>
           </tr>
         </thead>
         <tbody id="batchTbody">
@@ -565,26 +565,7 @@ function fitAxisAlignedEllipse(xs, zs) {
   const xc = -D/(2*A), zc = -E/(2*C);
   const rhs = A*xc*xc + C*zc*zc - F;
   if (rhs <= 0) return null;
-
-  // The algebraic solve above minimizes a coupled least-squares residual
-  // where x and z are tied together through the same conic equation, so
-  // its (a,b) ratio can end up on the wrong axis for some real arcs
-  // (confirmed visually: an arc taller than it is wide fitted to an
-  // ellipse wider than it is tall). Rather than trust that coupled ratio
-  // and just rescale it uniformly, keep only the centre (xc, zc) from the
-  // algebraic solve and size each axis independently, straight off how
-  // far the actual data spreads in x and in z - which axis ends up
-  // longer then falls out of the data itself, not a fixed assumption.
-  // The 90th-percentile spread (not the max) is used so one noisy/chamfer
-  // point at the rim can't dictate the whole ellipse's size.
-  const pct90 = (vals) => {
-    const s = [...vals].sort((p,q)=>p-q);
-    return s[Math.min(s.length-1, Math.floor(0.9*s.length))];
-  };
-  const a = pct90(xs.map(x => Math.abs(x-xc)));
-  const b = pct90(zs.map(z => Math.abs(z-zc)));
-  if (a <= 0 || b <= 0) return null;
-
+  const a = Math.sqrt(rhs/A), b = Math.sqrt(rhs/C);
   return { xc, zc, a, b };
 }
 
@@ -657,9 +638,9 @@ function extractArc(positions) {
    h_true = h_scan corrected for tilt.
 
    theta_tilt is not asked of the user: it is derived from the primary
-   ellipse fit's own axis ratio, cos(theta_tilt) = axisZ / axisX, since
-   the fitted diameter is taken as 2*axisX (x is the tilt-immune,
-   ground-truth axis) and axisZ is the tilted/foreshortened axis.
+   ellipse fit's own axis ratio, cos(theta_tilt) = semiMinor / semiMajor
+   (major/minor defined by actual magnitude, not by x/z direction - see
+   fitBore). The fitted diameter is taken as 2*semiMajor.
 */
 function computeSagittaCrossCheck(ax, az, fit) {
   const n = ax.length;
@@ -674,7 +655,8 @@ function computeSagittaCrossCheck(ax, az, fit) {
   }
   if (wScan <= 0 || hScan <= 0) return null;
 
-  const axisRatio = fit.b / fit.a; // = cos(theta_tilt): fit.a (x semi-axis) is the tilt-immune axis the primary diameter is built on
+  const semiMajor = Math.max(fit.a, fit.b), semiMinor = Math.min(fit.a, fit.b);
+  const axisRatio = semiMinor / semiMajor; // = cos(theta_tilt), always in (0,1] by construction
   if (!(axisRatio > 0 && axisRatio <= 1)) return null; // degenerate/noisy fit, skip cross-check
   const thetaTilt = Math.acos(axisRatio);
 
@@ -694,10 +676,21 @@ function fitBore(positions) {
 
   const sagitta = computeSagittaCrossCheck(arc.ax, arc.az, fit);
 
+  // Major/minor are defined by actual magnitude, not by which coordinate
+  // direction (x or z) they happen to fall on - the algebraic solve is
+  // symmetric between x and z, so nothing about the fit itself guarantees
+  // x comes out larger. Reporting "semi-axis (x dir)" as if that were the
+  // diameter-defining axis silently assumed an ordering the data doesn't
+  // promise. The ellipse's diameter is its major (longer) axis; this is
+  // the case for any ellipse.
+  const semiMajor = Math.max(fit.a, fit.b);
+  const semiMinor = Math.min(fit.a, fit.b);
+
   return {
     ok:true, arcPts: arc.ax.length,
     xc: fit.xc, zc: fit.zc, axisX: fit.a, axisZ: fit.b,
-    diameter: 2*fit.a,
+    semiMajor, semiMinor,
+    diameter: 2*semiMajor,
     sagitta
   };
 }
@@ -816,8 +809,8 @@ function renderSingleMetrics(fit) {
   note.textContent = 'Fit converged. Curve drawn in yellow in the viewport.';
   setText('mArcPts', String(fit.arcPts));
   setText('mCentre', fit.xc.toFixed(3) + ', ' + fit.zc.toFixed(3));
-  setText('mAx', fit.axisX.toFixed(4));
-  setText('mAz', fit.axisZ.toFixed(4));
+  setText('mAx', fit.semiMajor.toFixed(4));
+  setText('mAz', fit.semiMinor.toFixed(4));
   setText('mDfit', fit.diameter.toFixed(4));
 
   if (fit.sagitta) {
@@ -863,8 +856,8 @@ function renderBatch() {
         <td class="l">${r.name}</td>
         <td>${r.n.toLocaleString()}</td>
         <td>${r.arcPts}</td>
-        <td>${r.axisX.toFixed(4)}</td>
-        <td>${r.axisZ.toFixed(4)}</td>
+        <td>${r.semiMajor.toFixed(4)}</td>
+        <td>${r.semiMinor.toFixed(4)}</td>
         <td>${r.diameter.toFixed(4)}</td>
       </tr>`;
     }).join('');
