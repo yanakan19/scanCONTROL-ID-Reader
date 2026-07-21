@@ -565,7 +565,25 @@ function fitAxisAlignedEllipse(xs, zs) {
   const xc = -D/(2*A), zc = -E/(2*C);
   const rhs = A*xc*xc + C*zc*zc - F;
   if (rhs <= 0) return null;
-  const a = Math.sqrt(rhs/A), b = Math.sqrt(rhs/C);
+  let a = Math.sqrt(rhs/A), b = Math.sqrt(rhs/C);
+
+  // The algebraic solve above minimizes a least-squares residual, which
+  // runs an averaging line straight through the arc - roughly half the
+  // points end up outside it. Physically the arc should sit ON (not
+  // straddle) the true bore surface, so grow the ellipse, keeping its
+  // centre and aspect ratio fixed, until it encloses the data instead of
+  // splitting it. Using the single farthest point to size that growth
+  // would let one noisy/chamfer point dictate the whole ellipse, so the
+  // 90th-percentile radial distance is used instead - large enough to
+  // track the arc's real, smoother curve, small enough to ignore a
+  // handful of extreme outliers rather than being dragged out by them.
+  const ratios = xs.map((x,i) => {
+    const dx = (x-xc)/a, dz = (zs[i]-zc)/b;
+    return Math.sqrt(dx*dx+dz*dz);
+  }).sort((p,q)=>p-q);
+  const scale = ratios[Math.min(n-1, Math.floor(0.9*n))];
+  if (scale > 1) { a *= scale; b *= scale; }
+
   return { xc, zc, a, b };
 }
 
