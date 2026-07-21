@@ -673,19 +673,90 @@ function rejectOutliersAndRefit(ax, az, fit0) {
    re-confirming against the physical scanner/axis setup - if x is
    actually the tilted axis rather than z, the roles here should swap.
 
-   Assumes (per current simplification) that the two arc/baseline break
-   points sit at the same z level in the raw scan data.
+   The two arc endpoints (as selected by extractArc's threshold) rarely
+   sit at exactly the same z in noisy real data, and extractArc's region
+   itself can run wider on one side than the true rim crossing. Rather
+   than assume the endpoints already match, trimArcToMatchedBaseline()
+   below finds the largest sub-arc whose two ends do match: it tries
+   anchoring the baseline to each endpoint in turn, trims the *other*
+   side inward to the nearest point at that same z, and keeps whichever
+   of the two trims retains more width. This both enforces the
+   equal-endpoint-z assumption and discards whatever noisy excess made
+   the untrimmed side run wider than its partner - a legitimate arc
+   should be roughly symmetric about its peak, so the smaller side is
+   taken as ground truth for where the true chord ends.
+
+   Validated against real scanCONTROL data (1_1.csv etc.), extractArc's
+   20%-of-span threshold pulls in points beyond the true bore surface -
+   most likely a chamfer/blend radius where the flat back wall meets the
+   bore, common on real machined bushings/flanges. Those points are
+   provably not on the fitted circle (a point genuinely on the ellipse
+   can never have |x - xc| > a), so restrictArcToEllipseXRange() drops
+   them before the baseline-matching trim runs, rather than tuning an
+   arbitrary edge margin.
 */
-function computeSagittaCrossCheck(ax, az, fit) {
+function restrictArcToEllipseXRange(ax, az, fit) {
+  const lo = fit.xc - fit.a, hi = fit.xc + fit.a;
+  const keepAx = [], keepAz = [];
+  for (let i = 0; i < ax.length; i++) {
+    if (ax[i] >= lo && ax[i] <= hi) { keepAx.push(ax[i]); keepAz.push(az[i]); }
+  }
+  return keepAx.length >= 4 ? { ax: keepAx, az: keepAz } : { ax, az };
+}
+
+function trimArcToMatchedBaseline(ax, az) {
+  const n = ax.length;
+  if (n < 4) return { ax, az, baselineZ: (az[0] + az[n-1]) / 2 };
+  const mid = Math.floor(n / 2);
+
+  // Anchor each end on a small local average, not a single bin - single-bin
+  // z readings right at the rim are the most exposed to per-bin noise, and
+  // real scan data (checked on 1_1-1_5) shows z varying smoothly all the way
+  // to the tips with no flat/noisy plateau to crop away, so a window average
+  // is used to steady the anchor instead of discarding data outright.
+  const win = Math.max(1, Math.min(3, Math.floor(n / 10)));
+  const mean = arr => arr.reduce((s,v)=>s+v,0) / arr.length;
+  const zLeftAnchor = mean(az.slice(0, win));
+  const zRightAnchor = mean(az.slice(n - win));
+
+  // anchor on the left end's z; find where the right tail best matches it
+  let rightMatch = n - 1, bestDR = Math.abs(az[n-1] - zLeftAnchor);
+  for (let i = n - 2; i >= mid; i--) {
+    const d = Math.abs(az[i] - zLeftAnchor);
+    if (d < bestDR) { bestDR = d; rightMatch = i; }
+  }
+  const widthAnchorLeft = ax[rightMatch] - ax[0];
+
+  // anchor on the right end's z; find where the left tail best matches it
+  let leftMatch = 0, bestDL = Math.abs(az[0] - zRightAnchor);
+  for (let i = 1; i <= mid; i++) {
+    const d = Math.abs(az[i] - zRightAnchor);
+    if (d < bestDL) { bestDL = d; leftMatch = i; }
+  }
+  const widthAnchorRight = ax[n-1] - ax[leftMatch];
+
+  // keep whichever anchoring retains the larger (more data-supported) width;
+  // baseline is the average of the fixed end's smoothed anchor and the
+  // matched point's own z (a single value, since it was chosen to already
+  // agree with the anchor - no averaging needed there)
+  let s, e, baselineZ;
+  if (widthAnchorLeft >= widthAnchorRight) {
+    s = 0; e = rightMatch; baselineZ = (zLeftAnchor + az[rightMatch]) / 2;
+  } else {
+    s = leftMatch; e = n - 1; baselineZ = (az[leftMatch] + zRightAnchor) / 2;
+  }
+  if (e <= s) return { ax, az, baselineZ: (az[0] + az[n-1]) / 2 };
+  return { ax: ax.slice(s, e + 1), az: az.slice(s, e + 1), baselineZ };
+}
+
+function computeSagittaCrossCheck(axRaw, azRaw, fit) {
+  if (axRaw.length < 4) return null;
+  const restricted = restrictArcToEllipseXRange(axRaw, azRaw, fit);
+  const { ax, az, baselineZ } = trimArcToMatchedBaseline(restricted.ax, restricted.az);
   const n = ax.length;
   if (n < 2) return null;
-  let iMin = 0, iMax = 0;
-  for (let i = 1; i < n; i++) {
-    if (ax[i] < ax[iMin]) iMin = i;
-    if (ax[i] > ax[iMax]) iMax = i;
-  }
-  const wScan = ax[iMax] - ax[iMin];
-  const baselineZ = (az[iMin] + az[iMax]) / 2;
+
+  const wScan = ax[n-1] - ax[0];
   let hScan = 0;
   for (let i = 0; i < n; i++) {
     const d = Math.abs(az[i] - baselineZ);
